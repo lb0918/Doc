@@ -16,7 +16,7 @@ import matplotlib.pyplot as plt
 from scipy import ndimage
 from scipy.fft import fft, fftfreq
 from numpy.fft import fft2, ifft2, fftshift
-from matplotlib.widgets import RectangleSelector, Button
+from matplotlib.widgets import RectangleSelector, Button, EllipseSelector
 import csv
 import pickle as pkl
 from pylinac.core.nps import noise_power_spectrum_1d
@@ -424,10 +424,65 @@ class DicomImage:
         while not roi_selected:
             plt.pause(0.1)
 
-    def ROI_select_SNR(self):
+    def ROI_select_SNR_one_reg(self,shape="Rectangular"):
+        """
+        Selection of a single ROI's.
+
+        Parameters
+        ----------
+        shape : str
+            Shape of the ROI, either "Rectangular" or "circular".
+        """
+        if shape not in ["Rectangular", "Circular"]:
+            raise Exception("ROI shape unavailable!")
+        
+        global roi_selected,image_shape, object_ROI
+
+        subdirectories = [os.path.join(self.dicom_directory, d) for d in os.listdir(self.dicom_directory) if os.path.isdir(os.path.join(self.dicom_directory, d))]
+
+        if not subdirectories:
+            print("No sub-folder found in DICOM repository.")
+            return
+
+        first_sequence_dir = subdirectories[0]
+        images = self.load_dicom_series(first_sequence_dir)[0]
+        image = images[slice_index]
+        fig, ax = plt.subplots()
+        # ax.imshow(image[323:487,364:551], cmap='gray') #image[debut_y:fin_y,debut_x:fin_x]
+        ax.imshow(image, cmap='gray')
+        plt.title("Select a ROI containing the object by clicking and sliding")
+        if shape == "Rectangular":
+            object_selector = RectangleSelector(ax, self.onselect_object_ROI,
+                                                    useblit=False,
+                                                    button=[1], minspanx=5, minspany=5,
+                                                    spancoords='pixels', interactive=True)
+        else:
+            object_selector = EllipseSelector(ax, self.onselect_object_ROI,
+                                                    useblit=False,
+                                                    button=[1], minspanx=5, minspany=5,
+                                                    spancoords='pixels', interactive=True)
+
+        ax_button = plt.axes([0.8, 0.01, 0.1, 0.05])
+        button = Button(ax_button, 'Validate')
+        button.on_clicked(self.on_button_click)
+
+        plt.show()
+
+        while not roi_selected:
+            plt.pause(0.1)
+
+
+    def ROI_select_SNR_two_reg(self,shape="Rectangular"):
         """
         Selection of both object and background ROI's.
+
+        Parameters
+        ----------
+        shape : str
+            Shape of the ROI, either "Rectangular" or "circular".
         """
+        if shape not in ["Rectangular", "Circular"]:
+            raise Exception("ROI shape unavailable!")
         global object_ROI, background_ROI, roi_selected,image_shape
 
         subdirectories = [os.path.join(self.dicom_directory, d) for d in os.listdir(self.dicom_directory) if os.path.isdir(os.path.join(self.dicom_directory, d))]
@@ -444,10 +499,17 @@ class DicomImage:
         ax.imshow(image, cmap='gray')
         plt.title("Select a ROI containing the object by clicking and sliding")
 
-        object_selector = RectangleSelector(ax, self.onselect_object_ROI,
-                                                useblit=False,
-                                                button=[1], minspanx=5, minspany=5,
-                                                spancoords='pixels', interactive=True)
+
+        if shape == "Rectangular":
+            object_selector = RectangleSelector(ax, self.onselect_object_ROI,
+                                                    useblit=False,
+                                                    button=[1], minspanx=5, minspany=5,
+                                                    spancoords='pixels', interactive=True)
+        else:
+            object_selector = EllipseSelector(ax, self.onselect_object_ROI,
+                                                    useblit=False,
+                                                    button=[1], minspanx=5, minspany=5,
+                                                    spancoords='pixels', interactive=True)
 
         ax_button = plt.axes([0.8, 0.01, 0.1, 0.05])
         button = Button(ax_button, 'Validate')
@@ -464,10 +526,16 @@ class DicomImage:
         ax.imshow(image, cmap='gray')
         plt.title("Select a ROI containing the background by clicking and sliding")
 
-        background_selector = RectangleSelector(ax, self.onselect_background_ROI,
-                                            useblit=False,
-                                            button=[1], minspanx=5, minspany=5,
-                                            spancoords='pixels', interactive=True)
+        if shape == "Rectangular":
+            background_selector = RectangleSelector(ax, self.onselect_background_ROI,
+                                                    useblit=False,
+                                                    button=[1], minspanx=5, minspany=5,
+                                                    spancoords='pixels', interactive=True)
+        else:
+            background_selector = EllipseSelector(ax, self.onselect_background_ROI,
+                                                    useblit=False,
+                                                    button=[1], minspanx=5, minspany=5,
+                                                    spancoords='pixels', interactive=True)
 
         ax_button = plt.axes([0.8, 0.01, 0.1, 0.05])
         button = Button(ax_button, 'Validate')
@@ -478,18 +546,17 @@ class DicomImage:
         while not roi_selected:
             plt.pause(0.1)
 
-    def compute_SNR_pixel(self):
+    def compute_SNR_region(self,shape_ROI : str, number_ROI : int):
         """
-        Compute the value of the SNR by selecting the ROI's of the object of interest and the background
+        Compute the value of the SNR by selecting one or more ROI of interests.
 
         Returns
         ------
         SNR : float
             The SNR  value associated with the object and background ROI's selected.
         """
-        # Select ROI's
-        self.ROI_select_SNR()
-
+        
+            
         subdirectories = [os.path.join(self.dicom_directory, d) for d in os.listdir(self.dicom_directory) if os.path.isdir(os.path.join(self.dicom_directory, d))]
         first_sequence_dir = subdirectories[0]
         images = self.load_dicom_series(first_sequence_dir)[0]
@@ -497,27 +564,77 @@ class DicomImage:
         # Signal of the object and background regions ROI
         object_signal, background_signal = [], []
 
-        for x in np.arange(min(object_ROI[0][1],object_ROI[1][1])):
-            for y in np.arange(min(object_ROI[0][0],object_ROI[1][0])):
-                object_signal.append(image[x][y])
-        object_signal_arr = np.array(object_signal)
+        if shape_ROI == "Rectangular":
 
-        for x in np.arange(min(background_ROI[0][1],background_ROI[1][1])):
-            for y in np.arange(min(background_ROI[0][0],background_ROI[1][0])):
-                background_signal.append(image[x][y])
-        background_signal_arr = np.array(background_signal)
+            # Select ROI's
+            if number_ROI == 2:
+                self.ROI_select_SNR_two_reg(shape_ROI)
+                for x in np.arange(min(background_ROI[0][1],background_ROI[1][1]), max(background_ROI[0][1],background_ROI[1][1]),1):
+                    for y in np.arange(min(background_ROI[0][0],background_ROI[1][0]), max(background_ROI[0][0],background_ROI[1][0]), 1):
+                        background_signal.append(image[x][y])
+            if number_ROI == 1:
+                self.ROI_select_SNR_one_reg(shape_ROI)
+
+            for x in np.arange(min(object_ROI[0][1],object_ROI[1][1]), max(object_ROI[0][1],object_ROI[1][1]), 1):
+                for y in np.arange(min(object_ROI[0][0],object_ROI[1][0]), max(object_ROI[0][0],object_ROI[1][0]), 1):
+                    object_signal.append(image[x][y])
+
+        if shape_ROI == "Circular":
+            if number_ROI == 2:
+                self.ROI_select_SNR_two_reg(shape_ROI)
+                x1o, x2o, y1o, y2o = object_ROI[0][1], object_ROI[1][1], object_ROI[0][0], object_ROI[1][0]
+                x1b, x2b, y1b, y2b = background_ROI[0][1], background_ROI[1][1], background_ROI[0][0], background_ROI[1][0]
+                centero = ((x1o + x2o)/2, (y1o + y2o)/2)
+                centerb = ((x1b + x2b)/2, (y1b + y2b)/2)
+                ao, bo = abs(centero[0]-object_ROI[0][1]), abs(centero[1]-object_ROI[0][0])
+                print(ao,bo,centero[1],object_ROI[0][0],centero)
+                ab, bb = abs(centerb[0]-object_ROI[0][1]), abs(centerb[1]-object_ROI[0][0])
+                for xo in np.arange(min(x1o,x2o), max(x1o,x2o), 1):
+                    for yo in np.arange(min(y1o,y2o), max(y1o,y2o), 1):
+                        if ((xo-centero[0])/ao)**2+((yo-centero[1])/bo)**2 <= 1:
+                            object_signal.append(image[xo][yo])
+                for xb in np.arange(min(x1b,x2b), max(x1b,x2b)):
+                    for yb in np.arange(min(y1b,y2b), max(y1b,y2b)):
+                        if ((xb-centerb[0])/ab)**2+((yb-centerb[1])/bb)**2 <= 1:
+                            background_signal.append(image[xb][yb])
+                background_signal_arr = np.array(background_signal)
+            if number_ROI == 1:
+                self.ROI_select_SNR_one_reg(shape_ROI)
+                x1o, x2o, y1o, y2o = object_ROI[0][1], object_ROI[1][1], object_ROI[0][0], object_ROI[1][0]
+                centero = ((x1o + x2o)/2, (y1o + y2o)/2)
+                ao, bo = abs(centero[0]-object_ROI[0][1]), abs(centero[1]-object_ROI[0][0])
+                for xo in np.arange(min(x1o,x2o), max(x1o,x2o), 1):
+                    for yo in np.arange(min(y1o,y2o), max(y1o,y2o), 1):
+                        if ((xo-centero[0])/ao)**2+((yo-centero[1])/bo)**2 <= 1:
+                            object_signal.append(image[xo][yo])
+
+
+        object_signal_arr = np.array(object_signal)
+        print("************************")
+        print(len(object_signal_arr),len(object_signal))
+        print("************************")
+
+
 
         # Compute the value of the numerator in the SNR
         numerator = np.linalg.norm(object_signal_arr.astype(np.float64))
 
         # Compute the average pixel value and the std of the background ROI
-        average_background = sum(background_signal_arr)/len(background_signal_arr)
-        std_background = np.linalg.norm(background_signal_arr.astype(np.float64)-average_background.astype(np.float64))/(len(background_signal_arr)-1)
+        if number_ROI == 2:
+            average_denominator = sum(background_signal_arr.astype(np.float64))/len(background_signal_arr.astype(np.float64))
+            std_denominator = np.linalg.norm(background_signal_arr.astype(np.float64)-average_denominator.astype(np.float64))/(len(background_signal_arr)-1)
+        if number_ROI == 1:
+            average_denominator = sum(object_signal_arr.astype(np.float64))/len(object_signal_arr.astype(np.float64))
+            std_denominator = np.linalg.norm(object_signal_arr.astype(np.float64)-average_denominator.astype(np.float64))/(len(object_signal_arr)-1)
 
         # Compute the SNR
-        SNR = numerator/std_background
+        SNR = numerator/std_denominator
         print(f"The SNR value is {SNR}")
         return SNR
+    
+
+    
+
     def autocovariance_2d(self,image):
         """
         Computes the 2D autocovariance function of an image.
@@ -883,7 +1000,7 @@ class DicomImage:
     
 ###Exemple d'utilisation###
 dicom_directory = "DOCTORAT/10001_t2_tse_tra_p3_256_Bmed" # Path vers le dossier contenant les images DICOM
-slice_index = 5 # Numéros de l'image 
+slice_index = 12 # Numéros de l'image 
 save_to_csv = True 
 Image = DicomImage(dicom_directory, slice_index, save_to_csv=True)
 
@@ -891,6 +1008,7 @@ Image = DicomImage(dicom_directory, slice_index, save_to_csv=True)
 
 #Les trois méthodes de la classe
 
-Image.plot_MTF()
-# Image.compute_SNR_pixel()
+# Image.plot_MTF()
+Image.compute_SNR_region("Circular",1)
+# Image.compute_SNR_region("Rectangular",1)
 # Image.plot_SNR_frequency()
